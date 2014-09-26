@@ -32,6 +32,9 @@ object Planexecutor extends App {
     }
   }
 
+  val x = sequence(one(1) :: two(2) :: HNil)
+  println("sequence: " + x)
+
   val b = a.attemptRun
   println(b)
 

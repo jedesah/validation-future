@@ -1,11 +1,12 @@
 package com.whitepages
 
+import scalaz.concurrent.{Task, Future}
 import java.util.concurrent.ExecutorService
 
 import scalaz.concurrent.Future
 import scalaz.concurrent.Strategy
 import scalaz.\/._
-import scalaz.{\/, -\/, \/-}
+import scalaz._
 
 case class Warning(msg: String)
 
@@ -72,6 +73,70 @@ object PlanStep {
   /** Create a `Future` that will evaluate `a` using the given `ExecutorService`. */
   def apply[A](a: => (A, List[Warning]))(implicit pool: ExecutorService = Strategy.DefaultExecutorService): PlanStep[A] =
     new PlanStep(Future(Try(a))(pool))
+
+
+   implicit val planStepInstance: Monad[PlanStep] = new Monad[PlanStep] {
+     def point[A](a: => A) = new PlanStep(Future.delay(Try(a, Nil)))
+
+     def bind[A, B](fa: PlanStep[A])(f: A => PlanStep[B]): PlanStep[B] = {
+       fa flatMap f
+     }
+   }
+
+//  implicit val planStepInstance: Applicative[PlanStep] = new Applicative[PlanStep] {
+//    def ap[A,B](fa: => PlanStep[A])(f: => PlanStep[A => B]): PlanStep[B] = {
+//      new PlanStep(fa.get.map { case (result, warnings) =>
+//        result match {
+//          case -\/(e) => (-\/(e), warnings)
+//          case \/-(a) => {
+//            val x = f.get map { case (fResultFun, fWarnings) =>
+//              fResultFun match {
+//                case -\/(fE) => (-\/(fE), warnings ++ fWarnings)
+//                case \/-(fFun) => {
+//                  (\/-(fFun.apply(a)), warnings ++ fWarnings)
+//                }
+//              }
+//            }
+//            x.map { xf => PlanStep(xf) }
+//          }
+//        }
+//      }
+//      )
+//    }
+//  }
+//    def map[A, B](fa: PlanStep[A])(f: A => B): PlanStep[B] =
+//      new PlanStep(fa.get map { case (result, warnings) =>
+//        result match {
+//          case -\/(e) => (-\/(e), warnings)
+//          case \/-(a) => {
+//            val (result, newWarnings) = PlanStep.Try((f(a), Nil))
+//            (result, warnings ++ newWarnings)
+//          }
+//        }
+//      })
+
+//  implicit val planStepInstance: Nondeterminism[PlanStep] with Catchable[PlanStep] with MonadError[({type λ[α,β] = Task[β]})#λ,Throwable] = new Nondeterminism[Task] with Catchable[Task] with MonadError[({type λ[α,β] = Task[β]})#λ,Throwable] {
+//    val F = Nondeterminism[Future]
+//    def point[A](a: => A) = new Task(Future.delay(Try(a)))
+//    def bind[A,B](a: Task[A])(f: A => Task[B]): Task[B] =
+//      a flatMap f
+//    def chooseAny[A](h: Task[A], t: Seq[Task[A]]): Task[(A, Seq[Task[A]])] =
+//      new Task ( F.map(F.chooseAny(h.get, t map (_ get))) { case (a, residuals) =>
+//        a.map((_, residuals.map(new Task(_))))
+//      })
+//    override def gatherUnordered[A](fs: Seq[Task[A]]): Task[List[A]] = {
+//      new Task (F.map(F.gatherUnordered(fs.map(_ get)))(eithers =>
+//        Traverse[List].sequenceU(eithers)
+//      ))
+//    }
+//    def fail[A](e: Throwable): Task[A] = new Task(Future.now(-\/(e)))
+//    def attempt[A](a: Task[A]): Task[Throwable \/ A] = a.attempt
+//    def raiseError[A](e: Throwable): Task[A] = fail(e)
+//    def handleError[A](fa: Task[A])(f: Throwable => Task[A]): Task[A] =
+//      fa.handleWith { case t => f(t) }
+//  }
+
+
 
   def fail(e: Throwable): PlanStep[Nothing] = new PlanStep[Nothing](Future.now(-\/(e), Nil))
 
