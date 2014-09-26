@@ -1,3 +1,3 @@
-# Scala sbt-revolver
+# Objective
 
-A plain, simple Scala project using sbt-revolver for hot code reloading.
+Create a new Future-like abstraction that handles complex error handling scenarios.
