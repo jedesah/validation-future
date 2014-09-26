@@ -1,6 +1,9 @@
 package com.whitepages
 
+import java.util.concurrent.ExecutorService
+
 import scalaz.concurrent.Future
+import scalaz.concurrent.Strategy
 import scalaz.\/._
 import scalaz.{\/, -\/, \/-}
 
@@ -66,6 +69,10 @@ class PlanStep[+A](val get: Future[(Throwable \/ A, List[Warning])]) {
 }
 
 object PlanStep {
+  /** Create a `Future` that will evaluate `a` using the given `ExecutorService`. */
+  def apply[A](a: => (A, List[Warning]))(implicit pool: ExecutorService = Strategy.DefaultExecutorService): PlanStep[A] =
+    new PlanStep(Future(Try(a))(pool))
+
   def fail(e: Throwable): PlanStep[Nothing] = new PlanStep[Nothing](Future.now(-\/(e), Nil))
 
   def now[A](a: A): PlanStep[A] = new PlanStep(Future.now(\/-(a), Nil))
