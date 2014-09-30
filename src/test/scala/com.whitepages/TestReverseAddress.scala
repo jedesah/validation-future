@@ -1,14 +1,9 @@
 package com.whitepages
 
-import java.util.concurrent.TimeUnit
-
-import shapeless._
-
 import scalaz.{\/-, -\/}
 
 import org.scalatest.{FlatSpec, Matchers}
 import shapeless._
-import scala.concurrent.duration.{FiniteDuration, Duration}
 import scala.concurrent.duration._
 import scalaz._
 import shapeless.contrib.scalaz.sequence
@@ -33,8 +28,6 @@ class TestReverseAddress extends FlatSpec with Matchers {
       (\/-(m), warnings)
   }
 
-  trait Address
-  trait Dictionary
   case class DSOutputCassifiedAddresses(addressOpt: Option[String]) {
     def isFuzzy: Boolean = true
   }
@@ -46,8 +39,10 @@ class TestReverseAddress extends FlatSpec with Matchers {
   def getWindows(a: String) = PlanStep(5, Nil)
   def getWindowsFail(a: String) = PlanStep({ throw new Exception("hi"); 5 }, Nil)
   def getLocByDigest(a: String) = PlanStep(DSOutputDictionaryAndRoots(List("root"), "dictionary"), Nil)
-  def getLocByDigestFail(a: String) = PlanStep({ throw new Exception("getLocByDigestFail"); DSOutputDictionaryAndRoots(List("root"), "dictionary")}, Nil)
-  def prepareResults(dictAndRoots: DSOutputDictionaryAndRoots, isFuzzy: Boolean, numWindows: Option[Int]) = PlanStep((dictAndRoots.roots, isFuzzy, numWindows, dictAndRoots.dictionary), Nil)
+  def getLocByDigestFail(a: String) = PlanStep({ throw new Exception("getLocByDigestFail")
+                                                 DSOutputDictionaryAndRoots(List("root"), "dictionary")}, Nil)
+  def prepareResults(dictAndRoots: DSOutputDictionaryAndRoots, isFuzzy: Boolean, numWindows: Option[Int]) =
+    PlanStep((dictAndRoots.roots, isFuzzy, numWindows, dictAndRoots.dictionary), Nil)
 
 
   case class ValidationException(msg: String) extends Throwable
@@ -124,6 +119,33 @@ class TestReverseAddress extends FlatSpec with Matchers {
       case s => fail(s"did not expect: $s")
     }
     warnings should be('empty)
+  }
+
+  def startWarn(): PlanStep[String] = start().validateWith((a, warn) => (\/-(a), warn ++ List(Warning("start"))))
+  def getAddressDigestWarn(a: String) = getAddressDigest(a).validateWith((a, warn) => (\/-(a), warn ++ List(Warning("getAddressDigest"))))
+  def getWindowsFailWarn(a: String) = getWindowsFail(a).validateWith((a, warn) => (\/-(a), warn ++ List(Warning("getWindowsFail"))))
+  def getLocByDigestWarn(a: String) = getLocByDigest(a).validateWith((a, warn) => (\/-(a), warn ++ List(Warning("getLocByDigest"))))
+  def prepareResultsWarn(dictAndRoots: DSOutputDictionaryAndRoots, isFuzzy: Boolean, numWindows: Option[Int]) =
+    prepareResults(dictAndRoots, isFuzzy, numWindows).validateWith((a, warn) => (\/-(a), warn ++ List(Warning("prepareResults"))))
+
+  "warnings" should "propogate" in {
+    val res = startWarn().flatMap { startAddr =>
+      val cassRes = getAddressDigestWarn(startAddr).validateWith(ensureAddress)
+      val dictOut = cassRes.flatMap { cassAddr => getLocByDigestWarn(cassAddr.addressOpt.get)}.validateWith(ensureOneRoot)
+      val numWindows = getWindowsFailWarn(startAddr)
+      sequence(cassRes :: dictOut :: toOpt(numWindows) :: HNil) flatMap {
+        case cassVal :: dictVal :: numWindowsVal :: HNil => prepareResultsWarn(dictVal, cassVal.isFuzzy, numWindowsVal)
+      }
+    }
+
+    val (resOut, warnings) = res.run
+    println(warnings) // List((start), (getAddressDigest), (getAddressDigest), (getLocByDigest), (prepareResults))
+  }
+
+  "timeouts and warnings" should "allow previous warnings through" in {
+    val res = startWarn().flatMap { a => getAddressDigestLong(a).timed(10.milliseconds) }
+    val (either, warnings) = res.attemptRun
+    warnings.map(_.msg) should equal(List("start"))
   }
 
 }

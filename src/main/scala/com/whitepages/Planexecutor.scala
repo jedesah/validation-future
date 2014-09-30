@@ -35,7 +35,6 @@ object Planexecutor extends App {
         sequence(one :: two :: HNil).flatMap{case one :: two :: HNil => prepareResult(one, two)}
         join2(join2(one, two), joinOpt2(one, two)).flatMap {
           case ((rOne, rTwo), (rThree, rFour)) =>
-            rThree
             prepareResult(rOne, rTwo)
         }
       }
