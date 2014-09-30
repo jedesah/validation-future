@@ -127,8 +127,6 @@ object PlanStep {
      }
    }
 
-
-
   def fail(e: Throwable): PlanStep[Nothing] = new PlanStep[Nothing](Future.now(-\/(e), Nil))
 
   def now[A](a: A): PlanStep[A] = new PlanStep(Future.now(\/-(a), Nil))
