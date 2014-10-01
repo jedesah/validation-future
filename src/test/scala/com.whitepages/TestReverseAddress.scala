@@ -80,7 +80,7 @@ class TestReverseAddress extends FlatSpec with Matchers {
       case (List("root"), true, None, "dictionary") => println("yay") /* nop */
       case s => fail(s"did not expect: $s")
     }
-    warnings should be('empty)
+    warnings should have size(1)
   }
 
   "getLocByDigest failure" should "fail everything" in {
@@ -143,9 +143,9 @@ class TestReverseAddress extends FlatSpec with Matchers {
   }
 
   "timeouts and warnings" should "allow previous warnings through" in {
-    val res = startWarn().flatMap { a => getAddressDigestLong(a).timed(10.milliseconds) }
+    val res = startWarn().flatMap { a => getAddressDigestWarn(a).flatMap { b => getAddressDigestLong(a).timed(10.milliseconds) } }
     val (either, warnings) = res.attemptRun
-    warnings.map(_.msg) should equal(List("start"))
+    warnings.map(_.msg) should equal(List("start", "getAddressDigest"))
   }
 
 }

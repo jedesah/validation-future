@@ -13,6 +13,8 @@ object Planexecutor extends App {
   import shapeless.contrib.scalaz.sequence
   import shapeless.contrib.scalaz.Sequencer
 
+  implicit val overallTimeout = TimeoutFuture(Future.Async { _ => ()})
+
   def startThing() = PlanStep((5, Nil))
   def one(startThing: Int) = PlanStep((startThing * 8, Nil))
   def two(otherThing: Int) = PlanStep((otherThing / 1, Nil))
@@ -66,6 +68,11 @@ object Planexecutor extends App {
 //  println("hello")
   val result = f.run
   println(result)
+
+
+  val list = one(1) :: two(2) :: HNil
+
+
 
   scalaz.concurrent.Strategy.DefaultTimeoutScheduler.shutdown()
 }

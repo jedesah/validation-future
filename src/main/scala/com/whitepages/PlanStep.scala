@@ -1,17 +1,27 @@
 package com.whitepages
 
+import java.util.concurrent.atomic.{AtomicInteger, AtomicBoolean}
+
 import shapeless.{HNil, Id, HList}
 import shapeless.contrib.scalaz.{Apply2, Sequencer}
+import scalaz.syntax.monad._
 
 import scala.concurrent.duration.FiniteDuration
+import scalaz.Free.Trampoline
 import scalaz.concurrent._
-import java.util.concurrent.{TimeUnit, ExecutorService}
+import java.util.concurrent.{TimeoutException, TimeUnit, ExecutorService}
 import scalaz.\/._
 import scalaz._
 
 case class Warning(msg: String, exOpt: Option[Throwable] = None)
+case class TimeoutFuture(timeout: Future[Unit])
 
 class PlanStep[+A](val get: Future[(Throwable \/ A, List[Warning])]) {
+
+//  val get: Future[(Throwable \/ A, List[Warning])] = Future.Async { cb =>
+//    in.runAsync(out => cb(out))
+//    overallTimeoutOpt.map(t => t.timeout.runAsync(_ => cb((-\/(new TimeoutException), Nil))))
+//  }
 
   // allow direct access to warnings with map-like behavior.
   // TODO: also allow access to warnings in failure state?
@@ -88,8 +98,64 @@ class PlanStep[+A](val get: Future[(Throwable \/ A, List[Warning])]) {
 }
 
 object PlanStep {
+  def seq1[A](a: PlanStep[A]): PlanStep[A] = a
+
+  def seq2[A, B](a: PlanStep[A], b: PlanStep[B]): PlanStep[(A, B)] = {
+    new PlanStep(Future.Async { cb =>
+      val interrupt = new AtomicBoolean(false)
+      var resultA: (A, List[Warning]) = null
+      var resultB: (B, List[Warning]) = null
+      val togo = new AtomicInteger(2)
+
+      def tryComplete = {
+        if (togo.decrementAndGet() == 0) {
+          cb((\/-(resultA._1, resultB._1), resultA._2 ++ resultB._2))
+        } else {
+          Trampoline.done(())
+        }
+      }
+
+      def tryFailure(e: (-\/[Throwable], List[Warning])): Trampoline[Unit] = {
+        @annotation.tailrec
+        def firstFailure: Boolean = {
+          val current = togo.get
+          if (current > 0) {
+            if (togo.compareAndSet(current,0)) true
+            else firstFailure
+          }
+          else false
+        }
+
+        if (firstFailure)
+          cb(e) *> Trampoline.delay { interrupt.set(true); () }
+        else
+          Trampoline.done(())
+      }
+
+      val handleA: ((Throwable \/ A, List[Warning])) => Trampoline[Unit] = {
+        case (\/-(success), warnings) =>
+          resultA = (success, warnings)
+          tryComplete
+        case (-\/(e), warnings) => tryFailure((-\/(e), warnings))
+      }
+
+      val handleB: ((Throwable \/ B, List[Warning])) => Trampoline[Unit] = {
+        case (\/-(success), warnings) =>
+          resultB = (success, warnings)
+          tryComplete
+        case (-\/(e), warnings) => tryFailure((-\/(e), warnings))
+      }
+
+      a.get.listenInterruptibly(handleA, interrupt)
+      b.get.listenInterruptibly(handleB, interrupt)
+    })
+
+  }
+
   def toOpt[A](step: PlanStep[A]): PlanStep[Option[A]] = {
-    step.map(Some(_)) handle { case _: Throwable => Option.empty[A] }
+    step.map(Some(_)) handleWith { case t: Throwable =>
+      new PlanStep(Future.now((\/-(Option.empty[A]), List(Warning(s"$t (caused optional step failure)", Some(t))))))
+    }
   }
 
   def joinOpt1[A](a: PlanStep[A]): PlanStep[Option[A]] = toOpt(a)
@@ -118,6 +184,8 @@ object PlanStep {
   def apply[A](a: => (A, List[Warning]))(implicit pool: ExecutorService = Strategy.DefaultExecutorService): PlanStep[A] =
     new PlanStep(Future(Try(a))(pool))
 
+  def Salvage[A](a: => (A, List[Warning]))(implicit pool: ExecutorService = Strategy.DefaultExecutorService): PlanStep[A] =
+    new PlanStep(Future(Try(a))(pool))
 
    implicit val planStepInstance: Monad[PlanStep] = new Monad[PlanStep] {
      def point[A](a: => A) = new PlanStep(Future.delay(Try(a, Nil)))

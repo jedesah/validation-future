@@ -23,7 +23,7 @@ class TestErrorHandling extends FlatSpec with Matchers {
     val (resOut, warnings) = res.run
     resOut.head should equal("hi")
     resOut.tail.head should equal(None)
-    warnings.map(_.msg).toSet should equal(Set("warning1", "warning2"))
+    warnings.map(_.msg).toSet should have size(3) //warning1, warning2, java.lang.IlleaglArgumentException as warning
   }
 
   "Plan Step" should "pass warnings in failure case" in {
