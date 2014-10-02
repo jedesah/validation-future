@@ -13,37 +13,38 @@ object Planexecutor extends App {
   import shapeless.contrib.scalaz.sequence
   import shapeless.contrib.scalaz.Sequencer
 
-  def startThing() = PlanStep((5, Nil))
-  def one(startThing: Int) = PlanStep((startThing * 8, Nil))
-  def two(otherThing: Int) = PlanStep((otherThing / 1, Nil))
-  def three(oneThing: Int, twoThing: Int): PlanStep[String] = PlanStep((oneThing.toString + twoThing, Nil))
-  def four(oneThing: Int, twoThing: Int): PlanStep[Boolean] = PlanStep((oneThing == twoThing, Nil))
-  def prepareResult(a: String, b: Boolean): PlanStep[String] = PlanStep((a + b, Nil))
+  def startThing() = ComplexTask((5, Nil))
+  def one(startThing: Int) = ComplexTask((startThing * 8, Nil))
+  def two(otherThing: Int) = ComplexTask((otherThing / 1, Nil))
+  def three(oneThing: Int, twoThing: Int): ComplexTask[String, Unit] = ComplexTask((oneThing.toString + twoThing, Nil))
+  def four(oneThing: Int, twoThing: Int): ComplexTask[Boolean, Unit] = ComplexTask((oneThing == twoThing, Nil))
+  def prepareResult(a: String, b: Boolean): ComplexTask[String, Unit] = ComplexTask((a + b, Nil))
 
 //  def sequence[L <: HList, M <: HList](mandatory: L, optional: M)(implicit seq: Sequencer[L]): Sequencer[L]#Out :: M =
 //    scalaz.sequence(mandatory)(seq)
-  import PlanStep._
+  import ComplexTask._
 
   val a = startThing.flatMap{ thing =>
     one(thing).flatMap{ otherThing =>
       two(otherThing).flatMap{ secondThing =>
         val one = three(otherThing, secondThing)
         val two = four(otherThing, secondThing)
-        sequence(one :: two :: toOpt(one) :: toOpt(two) :: HNil).map {
-          case o :: t :: oOpt :: tOpt :: HNil => tOpt
-        }
-        sequence(one :: two :: HNil).flatMap{case aa :: bb :: HNil => prepareResult(aa, bb)}
-        join2(join2(one, two), joinOpt2(one, two)).flatMap {
-          case ((rOne, rTwo), (rThree, rFour)) =>
-            prepareResult(rOne, rTwo)
-        }
+//        sequence(one :: two :: toOpt(one, _ => ()) :: toOpt(two, _ => ()) :: HNil).map {
+//          case o :: t :: oOpt :: tOpt :: HNil => tOpt
+//        }
+//        sequence(one :: two :: HNil).flatMap{case aa :: bb :: HNil => prepareResult(aa, bb)}
+//        join2(join2(one, two), joinOpt2(one, two)).flatMap {
+//          case ((rOne, rTwo), (rThree, rFour)) =>
+//            prepareResult(rOne, rTwo)
+//        }
+        two
       }
     }
   }
 
 //  planSequence(one(1) :: two(2) :: HNil, three(3, 4) :: four(4, 5) :: HNil): PlanStep[Int :: Int :: HNil :: Option[Int] :: Option[Int] :: HNil]
 
-  val x = sequence(one(1) :: two(2) :: HNil)
+//  val x = sequence(one(1) :: two(2) :: HNil)
 //  println("sequence: " + x)
 
   val b = a.attemptRun
