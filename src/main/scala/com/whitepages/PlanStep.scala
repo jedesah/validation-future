@@ -152,6 +152,67 @@ object PlanStep {
 
   }
 
+  def seq3[A, B, C](a: PlanStep[A], b: PlanStep[B], c: PlanStep[C]): PlanStep[(A, B, C)] = {
+    new PlanStep(Future.Async { cb =>
+      val interrupt = new AtomicBoolean(false)
+      var resultA: (A, List[Warning]) = null
+      var resultB: (B, List[Warning]) = null
+      var resultC: (C, List[Warning]) = null
+      val togo = new AtomicInteger(2)
+
+      def tryComplete = {
+        if (togo.decrementAndGet() == 0) {
+          cb((\/-(resultA._1, resultB._1, resultC._1), resultA._2 ++ resultB._2 ++ resultC._2))
+        } else {
+          Trampoline.done(())
+        }
+      }
+
+      def tryFailure(e: (-\/[Throwable], List[Warning])): Trampoline[Unit] = {
+        @annotation.tailrec
+        def firstFailure: Boolean = {
+          val current = togo.get
+          if (current > 0) {
+            if (togo.compareAndSet(current,0)) true
+            else firstFailure
+          }
+          else false
+        }
+
+        if (firstFailure)
+          cb(e) *> Trampoline.delay { interrupt.set(true); () }
+        else
+          Trampoline.done(())
+      }
+
+      val handleA: ((Throwable \/ A, List[Warning])) => Trampoline[Unit] = {
+        case (\/-(success), warnings) =>
+          resultA = (success, warnings)
+          tryComplete
+        case (-\/(e), warnings) => tryFailure((-\/(e), warnings))
+      }
+
+      val handleB: ((Throwable \/ B, List[Warning])) => Trampoline[Unit] = {
+        case (\/-(success), warnings) =>
+          resultB = (success, warnings)
+          tryComplete
+        case (-\/(e), warnings) => tryFailure((-\/(e), warnings))
+      }
+
+      val handleC: ((Throwable \/ C, List[Warning])) => Trampoline[Unit] = {
+        case (\/-(success), warnings) =>
+          resultC = (success, warnings)
+          tryComplete
+        case (-\/(e), warnings) => tryFailure((-\/(e), warnings))
+      }
+
+      a.get.listenInterruptibly(handleA, interrupt)
+      b.get.listenInterruptibly(handleB, interrupt)
+      c.get.listenInterruptibly(handleC, interrupt)
+    })
+
+  }
+
   def toOpt[A](step: PlanStep[A]): PlanStep[Option[A]] = {
     step.map(Some(_)) handleWith { case t: Throwable =>
       new PlanStep(Future.now((\/-(Option.empty[A]), List(Warning(s"`$t`: (caused optional step failure)", Some(t))))))
