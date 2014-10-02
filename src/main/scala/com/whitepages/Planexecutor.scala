@@ -13,8 +13,6 @@ object Planexecutor extends App {
   import shapeless.contrib.scalaz.sequence
   import shapeless.contrib.scalaz.Sequencer
 
-  implicit val overallTimeout = TimeoutFuture(Future.Async { _ => ()})
-
   def startThing() = PlanStep((5, Nil))
   def one(startThing: Int) = PlanStep((startThing * 8, Nil))
   def two(otherThing: Int) = PlanStep((otherThing / 1, Nil))
@@ -34,7 +32,7 @@ object Planexecutor extends App {
         sequence(one :: two :: toOpt(one) :: toOpt(two) :: HNil).map {
           case o :: t :: oOpt :: tOpt :: HNil => tOpt
         }
-        sequence(one :: two :: HNil).flatMap{case one :: two :: HNil => prepareResult(one, two)}
+        sequence(one :: two :: HNil).flatMap{case aa :: bb :: HNil => prepareResult(aa, bb)}
         join2(join2(one, two), joinOpt2(one, two)).flatMap {
           case ((rOne, rTwo), (rThree, rFour)) =>
             prepareResult(rOne, rTwo)
