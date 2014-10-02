@@ -1,18 +1,15 @@
 package com.whitepages
 
-import java.util.concurrent.atomic.{AtomicInteger, AtomicBoolean}
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger}
 
-import shapeless.{HNil, Id, HList}
-import shapeless.contrib.scalaz.{Apply2, Sequencer}
-import scala.concurrent.{Future => SFuture}
-import scalaz.syntax.monad._
-
+import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration.FiniteDuration
+import scala.concurrent.{Future => SFuture}
 import scalaz.Free.Trampoline
-import scalaz.concurrent._
-import java.util.concurrent.{TimeoutException, TimeUnit, ExecutorService}
-import scalaz.\/._
 import scalaz._
+import scalaz.concurrent._
+import scalaz.syntax.monad._
 
 case class Warning(msg: String, exOpt: Option[Throwable] = None)
 case class TimeoutFuture(timeout: Future[Unit])
