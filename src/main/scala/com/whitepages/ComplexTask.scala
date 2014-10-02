@@ -96,7 +96,7 @@ object ComplexTask {
 
   def seq1[A, E](a: ComplexTask[A, E]): ComplexTask[A, E] = a
 
-  def seq2[A, B, E <: Throwable](a: ComplexTask[A, E], b: ComplexTask[B, E]): ComplexTask[(A, B), E] = {
+  def seq2[A, B, E](a: ComplexTask[A, E], b: ComplexTask[B, E]): ComplexTask[(A, B), E] = {
     new ComplexTask[(A, B), E](Future.Async { cb =>
       val interrupt = new AtomicBoolean(false)
       var resultA: (A, List[E]) = null
@@ -132,14 +132,19 @@ object ComplexTask {
         case (\/-(success), warnings) =>
           resultA = (success, warnings)
           tryComplete
-        case (-\/(e), warnings) => tryFailure((-\/(e), warnings))
+        case (-\/(e), warnings) =>
+          val bWarnings = Option(resultB).map(_._2).getOrElse(Nil)
+          tryFailure((-\/(e), warnings ++ bWarnings))
       }
 
       val handleB: ((Throwable \/ B, List[E])) => Trampoline[Unit] = {
         case (\/-(success), warnings) =>
           resultB = (success, warnings)
           tryComplete
-        case (-\/(e), warnings) => tryFailure((-\/(e), warnings))
+        case (-\/(e), warnings) => {
+          val aWarnings = Option(resultA).map(_._2).getOrElse(Nil)
+          tryFailure((-\/(e), warnings ++ aWarnings))
+        }
       }
 
       a.get.listenInterruptibly(handleA, interrupt)
@@ -148,13 +153,13 @@ object ComplexTask {
 
   }
 
-  def seq3[A, B, C, E <: Throwable](a: ComplexTask[A, E], b: ComplexTask[B, E], c: ComplexTask[C, E]): ComplexTask[(A, B, C), E] = {
+  def seq3[A, B, C, E](a: ComplexTask[A, E], b: ComplexTask[B, E], c: ComplexTask[C, E]): ComplexTask[(A, B, C), E] = {
     new ComplexTask[(A, B, C), E](Future.Async { cb =>
       val interrupt = new AtomicBoolean(false)
       var resultA: (A, List[E]) = null
       var resultB: (B, List[E]) = null
       var resultC: (C, List[E]) = null
-      val togo = new AtomicInteger(2)
+      val togo = new AtomicInteger(3)
 
       def tryComplete = {
         if (togo.decrementAndGet() == 0) {
@@ -238,10 +243,10 @@ object ComplexTask {
   }
 
   /** Create a `Future` that will evaluate `a` using the given `ExecutorService`. */
-  def apply[A, E <: Throwable](a: => (A, List[E]))(implicit pool: ExecutorService = Strategy.DefaultExecutorService): ComplexTask[A, E] =
+  def apply[A, E](a: => (A, List[E]))(implicit pool: ExecutorService = Strategy.DefaultExecutorService): ComplexTask[A, E] =
     new ComplexTask(Future(Try(a))(pool))
 
-  def Salvage[A, E <: Throwable](a: => (A, List[E]))(implicit pool: ExecutorService = Strategy.DefaultExecutorService): ComplexTask[A, E] =
+  def Salvage[A, E](a: => (A, List[E]))(implicit pool: ExecutorService = Strategy.DefaultExecutorService): ComplexTask[A, E] =
     new ComplexTask(Future(Try(a))(pool))
 
 
