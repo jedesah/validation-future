@@ -11,7 +11,9 @@ import shapeless.contrib.scalaz.sequence
 import scalaz.-\/
 import scalaz.concurrent.{Task, Future}
 import scalaz.\/._
-import PlanStep._
+import ComplexTask._
+
+case class Warning(msg: String, exOpt: Option[Throwable] = None)
 
 class TestReverseAddress extends FlatSpec with Matchers {
   def ensureAddress(cassifiedAddresses: DSOutputCassifiedAddresses, warnings: List[Warning]) = {
@@ -33,27 +35,27 @@ class TestReverseAddress extends FlatSpec with Matchers {
   }
   case class DSOutputDictionaryAndRoots(roots: List[String], dictionary: String, totalResultSize: Option[Int] = None)
 
-  def start(): PlanStep[String] = PlanStep("hi", Nil)
-  def getAddressDigest(a: String) = PlanStep(DSOutputCassifiedAddresses(Some(a)), Nil)
-  def getAddressDigestLong(a: String) = new PlanStep(Future.schedule((\/-(DSOutputCassifiedAddresses(Some(a))), Nil), 500.milliseconds))
-  def getWindows(a: String) = PlanStep(5, Nil)
-  def getWindowsFail(a: String) = PlanStep({ throw new Exception("hi"); 5 }, Nil)
-  def getLocByDigest(a: String) = PlanStep(DSOutputDictionaryAndRoots(List("root"), "dictionary"), Nil)
-  def getLocByDigestFail(a: String) = PlanStep({ throw new Exception("getLocByDigestFail")
+  def start(): ComplexTask[String, Warning] = ComplexTask("hi", Nil)
+  def getAddressDigest(a: String) = ComplexTask(DSOutputCassifiedAddresses(Some(a)), Nil)
+  def getAddressDigestLong(a: String) = new ComplexTask(Future.schedule((\/-(DSOutputCassifiedAddresses(Some(a))), Nil), 500.milliseconds))
+  def getWindows(a: String) = ComplexTask[Int, Warning](5, Nil)
+  def getWindowsFail(a: String) = ComplexTask({ throw new Exception("hi"); 5 }, Nil)
+  def getLocByDigest(a: String) = ComplexTask(DSOutputDictionaryAndRoots(List("root"), "dictionary"), Nil)
+  def getLocByDigestFail(a: String) = ComplexTask({ throw new Exception("getLocByDigestFail")
                                                  DSOutputDictionaryAndRoots(List("root"), "dictionary")}, Nil)
   def prepareResults(dictAndRoots: DSOutputDictionaryAndRoots, isFuzzy: Boolean, numWindows: Option[Int]) =
-    PlanStep((dictAndRoots.roots, isFuzzy, numWindows, dictAndRoots.dictionary), Nil)
+    ComplexTask((dictAndRoots.roots, isFuzzy, numWindows, dictAndRoots.dictionary), Nil)
 
 
   case class ValidationException(msg: String) extends Throwable
 
   "total success" should "work" in {
     val res = start.flatMap { startAddr =>
-      val cassRes = getAddressDigest(startAddr).validateWith(ensureAddress)
-      val dictOut = cassRes.flatMap { cassAddr => getLocByDigest(cassAddr.addressOpt.get)}.validateWith(ensureOneRoot)
+      val cassRes = getAddressDigest(startAddr)
+      val dictOut = cassRes.flatMap { cassAddr => getLocByDigest(cassAddr.addressOpt.get)}
       val numWindows = getWindows(startAddr)
-      sequence(cassRes :: dictOut :: toOpt(numWindows) :: HNil) flatMap {
-        case cassVal :: dictVal :: numWindowsVal :: HNil => prepareResults(dictVal, cassVal.isFuzzy, numWindowsVal)
+      seq3(cassRes, dictOut, toOpt(numWindows, t => Warning("hi", Some(t)))) flatMap {
+        case (cassVal, dictVal, numWindowsVal) => prepareResults(dictVal, cassVal.isFuzzy, numWindowsVal)
       }
     }
 
@@ -67,11 +69,11 @@ class TestReverseAddress extends FlatSpec with Matchers {
 
   "getWindows failure" should "still succeed" in {
     val res = start.flatMap { startAddr =>
-      val cassRes = getAddressDigest(startAddr).validateWith(ensureAddress)
-      val dictOut = cassRes.flatMap { cassAddr => getLocByDigest(cassAddr.addressOpt.get)}.validateWith(ensureOneRoot)
+      val cassRes = getAddressDigest(startAddr)
+      val dictOut = cassRes.flatMap { cassAddr => getLocByDigest(cassAddr.addressOpt.get)}
       val numWindows = getWindowsFail(startAddr)
-      sequence(cassRes :: dictOut :: toOpt(numWindows) :: HNil) flatMap {
-        case cassVal :: dictVal :: numWindowsVal :: HNil => prepareResults(dictVal, cassVal.isFuzzy, numWindowsVal)
+      seq3(cassRes, dictOut, toOpt(numWindows, t => Warning("ok", Some(t)))) flatMap {
+        case (cassVal, dictVal, numWindowsVal) => prepareResults(dictVal, cassVal.isFuzzy, numWindowsVal)
       }
     }
 
@@ -85,11 +87,11 @@ class TestReverseAddress extends FlatSpec with Matchers {
 
   "getLocByDigest failure" should "fail everything" in {
     val res = start.flatMap { startAddr =>
-      val cassRes = getAddressDigest(startAddr).validateWith(ensureAddress)
-      val dictOut = cassRes.flatMap { cassAddr => getLocByDigestFail(cassAddr.addressOpt.get)}.validateWith(ensureOneRoot)
+      val cassRes = getAddressDigest(startAddr)
+      val dictOut = cassRes.flatMap { cassAddr => getLocByDigestFail(cassAddr.addressOpt.get)}
       val numWindows = getWindowsFail(startAddr)
-      sequence(cassRes :: dictOut :: toOpt(numWindows) :: HNil) flatMap {
-        case cassVal :: dictVal :: numWindowsVal :: HNil => prepareResults(dictVal, cassVal.isFuzzy, numWindowsVal)
+      seq3(cassRes, dictOut, toOpt(numWindows, t => Warning("s", Some(t)))) flatMap {
+        case (cassVal, dictVal, numWindowsVal) => prepareResults(dictVal, cassVal.isFuzzy, numWindowsVal)
       }
     }
 
@@ -104,11 +106,11 @@ class TestReverseAddress extends FlatSpec with Matchers {
   // Note that it is crucial that the .timed on getLocByDigest takes place within the flatMap
   "stacked timings" should "work" in {
     val res = start.flatMap { startAddr =>
-      val cassRes = getAddressDigestLong(startAddr).validateWith(ensureAddress).timed(1.second) // takes 500 milliseconds
-      val dictOut = cassRes.flatMap { cassAddr => getLocByDigest(cassAddr.addressOpt.get).timed(50.milliseconds) }.validateWith(ensureOneRoot)
+      val cassRes = getAddressDigestLong(startAddr).timed(1.second) // takes 500 milliseconds
+      val dictOut = cassRes.flatMap { cassAddr => getLocByDigest(cassAddr.addressOpt.get).timed(50.milliseconds) }
       val numWindows = getWindows(startAddr).timed(1.second)
-      sequence(cassRes :: dictOut :: toOpt(numWindows) :: HNil) flatMap {
-        case cassVal :: dictVal :: numWindowsVal :: HNil => prepareResults(dictVal, cassVal.isFuzzy, numWindowsVal)
+      seq3(cassRes, dictOut, toOpt(numWindows, t => Warning("why", Some(t)))) flatMap {
+        case (cassVal, dictVal, numWindowsVal)=> prepareResults(dictVal, cassVal.isFuzzy, numWindowsVal)
       }
     }
 
@@ -119,33 +121,6 @@ class TestReverseAddress extends FlatSpec with Matchers {
       case s => fail(s"did not expect: $s")
     }
     warnings should be('empty)
-  }
-
-  def startWarn(): PlanStep[String] = start().validateWith((a, warn) => (\/-(a), warn ++ List(Warning("start"))))
-  def getAddressDigestWarn(a: String) = getAddressDigest(a).validateWith((a, warn) => (\/-(a), warn ++ List(Warning("getAddressDigest"))))
-  def getWindowsFailWarn(a: String) = getWindowsFail(a).validateWith((a, warn) => (\/-(a), warn ++ List(Warning("getWindowsFail"))))
-  def getLocByDigestWarn(a: String) = getLocByDigest(a).validateWith((a, warn) => (\/-(a), warn ++ List(Warning("getLocByDigest"))))
-  def prepareResultsWarn(dictAndRoots: DSOutputDictionaryAndRoots, isFuzzy: Boolean, numWindows: Option[Int]) =
-    prepareResults(dictAndRoots, isFuzzy, numWindows).validateWith((a, warn) => (\/-(a), warn ++ List(Warning("prepareResults"))))
-
-  "warnings" should "propogate" in {
-    val res = startWarn().flatMap { startAddr =>
-      val cassRes = getAddressDigestWarn(startAddr).validateWith(ensureAddress)
-      val dictOut = cassRes.flatMap { cassAddr => getLocByDigestWarn(cassAddr.addressOpt.get)}.validateWith(ensureOneRoot)
-      val numWindows = getWindowsFailWarn(startAddr)
-      sequence(cassRes :: dictOut :: toOpt(numWindows) :: HNil) flatMap {
-        case cassVal :: dictVal :: numWindowsVal :: HNil => prepareResultsWarn(dictVal, cassVal.isFuzzy, numWindowsVal)
-      }
-    }
-
-    val (resOut, warnings) = res.run
-    println(warnings) // List((start), (getAddressDigest), (getAddressDigest), (getLocByDigest), (prepareResults))
-  }
-
-  "timeouts and warnings" should "allow previous warnings through" in {
-    val res = startWarn().flatMap { a => getAddressDigestWarn(a).flatMap { b => getAddressDigestLong(a).timed(10.milliseconds) } }
-    val (either, warnings) = res.attemptRun
-    warnings.map(_.msg) should equal(List("start", "getAddressDigest"))
   }
 
 }
