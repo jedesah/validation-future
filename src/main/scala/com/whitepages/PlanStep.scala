@@ -154,7 +154,7 @@ object PlanStep {
 
   def toOpt[A](step: PlanStep[A]): PlanStep[Option[A]] = {
     step.map(Some(_)) handleWith { case t: Throwable =>
-      new PlanStep(Future.now((\/-(Option.empty[A]), List(Warning(s"$t (caused optional step failure)", Some(t))))))
+      new PlanStep(Future.now((\/-(Option.empty[A]), List(Warning(s"`$t`: (caused optional step failure)", Some(t))))))
     }
   }
 
