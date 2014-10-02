@@ -4,7 +4,6 @@ import java.util.concurrent.{TimeoutException, TimeUnit}
 
 import org.scalatest.{FlatSpec, Matchers}
 import shapeless._
-import scala.concurrent.duration.{FiniteDuration, Duration}
 import scalaz._
 import shapeless.contrib.scalaz.sequence
 
@@ -12,6 +11,7 @@ import scalaz.-\/
 import scalaz.concurrent.{Task, Future}
 import scalaz.\/._
 import PlanStep._
+import scala.concurrent.duration._
 
 class TestErrorHandling extends FlatSpec with Matchers {
 
@@ -55,5 +55,16 @@ class TestErrorHandling extends FlatSpec with Matchers {
     val prep = sequence(a :: b :: HNil).map { case aVal :: bVal :: HNil => s"$aVal, $bVal" }
     val (resOut, warnings) = prep.run
     warnings should have size(1)
+  }
+
+  "future" should "flatmap" in {
+    val long = Future.schedule((), 3.second)
+    val start = Future.schedule(5, 10.milliseconds)
+    var x = 0
+    val f: Future[Int] = Future.async { cb => start.runAsync { i => cb(i) } }
+    val mapped = f.flatMap { i => Future.now { x = i + 1; 12 } }
+    mapped.runAsync(println)
+    long.run
+    x should equal(6)
   }
 }
