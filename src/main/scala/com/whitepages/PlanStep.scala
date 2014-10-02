@@ -4,6 +4,7 @@ import java.util.concurrent.atomic.{AtomicInteger, AtomicBoolean}
 
 import shapeless.{HNil, Id, HList}
 import shapeless.contrib.scalaz.{Apply2, Sequencer}
+import scala.concurrent.{Future => SFuture}
 import scalaz.syntax.monad._
 
 import scala.concurrent.duration.FiniteDuration
@@ -98,6 +99,13 @@ class PlanStep[+A](val get: Future[(Throwable \/ A, List[Warning])]) {
 }
 
 object PlanStep {
+  def toZFuture[A](f: SFuture[(Throwable \/ A, List[Warning])]): Future[(Throwable \/ A, List[Warning])] = {
+    Future.async { cb =>
+      f.onSuccess { case success => cb(success) }
+      f.onFailure { case failure => cb((-\/(failure), Nil)) }
+    }
+  }
+
   def seq1[A](a: PlanStep[A]): PlanStep[A] = a
 
   def seq2[A, B](a: PlanStep[A], b: PlanStep[B]): PlanStep[(A, B)] = {
