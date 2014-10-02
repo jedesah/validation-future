@@ -1,3 +1,11 @@
+name := "complex-task"
+
+organization := "com.whitepages"
+
+version := "0.1.0-SNAPSHOT"
+
+scalaVersion := "2.11.2"
+
 libraryDependencies ++= Seq(
   "org.scalaz" %% "scalaz-core" % "7.1.0",
   "org.scalaz" %% "scalaz-concurrent" % "7.1.0",
