@@ -77,7 +77,7 @@ class ComplexTask[+A, +E](val get: Future[(Throwable \/ A, List[E])]) {
 
   def run[E1>:E]: (A, List[E1]) = get.run match {
     case (-\/(e), warnings) => throw e
-    case (\/-(a), warnings) => (a, warnings)
+    case (\/-(a), warnings) => (a, warnings.toSet.toList)
   }
 
   def attemptRun[E1>:E]: (Throwable \/ A, List[E1]) = {
