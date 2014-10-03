@@ -66,8 +66,15 @@ class ComplexTask[+A, +E](val get: Future[(Throwable \/ A, List[E])]) {
   def handleWith[B>:A,E1>:E](f: PartialFunction[Throwable,ComplexTask[B, E1]]): ComplexTask[B, E1] =
     attempt flatMap {
       case -\/(e) => f.lift(e) getOrElse ComplexTask.fail(e)
-      case \/-(a) => ComplexTask.now(a)
+      case \/-(a) => this
     }
+
+  def mapFailure(f: PartialFunction[Throwable, Throwable]): ComplexTask[A, E] = {
+    attempt flatMap {
+      case -\/(e) => ComplexTask.fail(f(e))
+      case \/-(a) => this
+    }
+  }
 
   def or[A1>:A,E1>:E](t2: ComplexTask[A1, E1]): ComplexTask[A1, E1] =
     new ComplexTask[A1, E1](this.get flatMap {
