@@ -14,7 +14,7 @@ import scalaz.syntax.monad._
 
 case class TimeoutFuture(timeout: Future[Unit])
 
-class ComplexTask[+A, +E](val get: Future[(Throwable \/ A, List[E])]) {
+class ComplexTask[+A, +E: Monoid](val get: Future[(Throwable \/ A, E)]) {
 
 //  val get: Future[(Throwable \/ A, List[E])] = Future.Async { cb =>
 //    in.runAsync(out => cb(out))
@@ -24,12 +24,12 @@ class ComplexTask[+A, +E](val get: Future[(Throwable \/ A, List[E])]) {
   // add timeout to get
   def timed(timeout: FiniteDuration) = {
     new ComplexTask(get.timed(timeout).map {
-      case -\/(t) => (-\/(t), List.empty[E])
+      case -\/(t) => (-\/(t), Monoid[E].zero)
       case \/-(success) => success
     })
   }
 
-  def flatMap[B, E1 >: E](f: A => ComplexTask[B, E1]) =
+  def flatMap[B, E1 >: E](f: A => ComplexTask[B, E1])(implicit monoid: Monoid[E1]) =
     new ComplexTask[B, E1](get flatMap {
       case (-\/(e), warnings) => Future.now(-\/(e), warnings)
       // We need to catch any exception thrown in the glue code used in the flatMap
@@ -37,7 +37,7 @@ class ComplexTask[+A, +E](val get: Future[(Throwable \/ A, List[E])]) {
         case scala.util.Failure(e) => Future.now((-\/(e), warnings))
         case scala.util.Success(step) => {
           val f = step.get
-          f.map { case (result, newWarnings) => (result, warnings ++ newWarnings) }
+          f.map { case (result, newWarnings) => (result, Monoid[E1].append(warnings, newWarnings)) }
         }
       }
     })
@@ -64,12 +64,14 @@ class ComplexTask[+A, +E](val get: Future[(Throwable \/ A, List[E])]) {
 
   def onFinish[E1 >: E](f: Option[Throwable] => ComplexTask[Unit, E1]): ComplexTask[A, E] = ???
 
-  def handle[B>:A](f: PartialFunction[Throwable,B]): ComplexTask[B, E] =
-    handleWith(f andThen ComplexTask.now)
+  def handle[B>:A](f: PartialFunction[Throwable,B]): ComplexTask[B, E] = {
+    val monoid = implicitly[Monoid[E]]
+    handleWith(f andThen (ComplexTask.now(_)(monoid)))
+  }
 
-  def handleWith[B>:A,E1>:E](f: PartialFunction[Throwable,ComplexTask[B, E1]]): ComplexTask[B, E1] =
+  def handleWith[B>:A,E1>:E](f: PartialFunction[Throwable,ComplexTask[B, E1]])(implicit monoid: Monoid[E1]): ComplexTask[B, E1] =
     attempt flatMap {
-      case -\/(e) => f.lift(e) getOrElse ComplexTask.fail(e)
+      case -\/(e) => f.lift(e) getOrElse ComplexTask.fail(e)(Monoid[E1])
       case \/-(a) => this
     }
 
@@ -80,18 +82,18 @@ class ComplexTask[+A, +E](val get: Future[(Throwable \/ A, List[E])]) {
     }
   }
 
-  def or[A1>:A,E1>:E](t2: ComplexTask[A1, E1]): ComplexTask[A1, E1] =
+  def or[A1>:A,E1>:E](t2: ComplexTask[A1, E1])(implicit monoid: Monoid[E1]): ComplexTask[A1, E1] =
     new ComplexTask[A1, E1](this.get flatMap {
       case (-\/(_), warnings) => t2.get
       case (\/-(a), warnings) => Future.now((\/-(a), warnings))
     })
 
-  def run[E1>:E]: (A, List[E1]) = get.run match {
+  def run: (A, E) = get.run match {
     case (-\/(e), warnings) => throw e
-    case (\/-(a), warnings) => (a, warnings.toSet.toList)
+    case (\/-(a), warnings) => (a, warnings)
   }
 
-  def attemptRun[E1>:E]: (Throwable \/ A, List[E1]) = {
+  def attemptRun: (Throwable \/ A, E) = {
     get.run
   }
 
@@ -107,22 +109,22 @@ object ComplexTask {
 
   def seq1[A, E](a: ComplexTask[A, E]): ComplexTask[A, E] = a
 
-  def seq2[A, B, E](a: ComplexTask[A, E], b: ComplexTask[B, E]): ComplexTask[(A, B), E] = {
+  def seq2[A, B, E: Monoid](a: ComplexTask[A, E], b: ComplexTask[B, E]): ComplexTask[(A, B), E] = {
     new ComplexTask[(A, B), E](Future.Async { cb =>
       val interrupt = new AtomicBoolean(false)
-      var resultA: (A, List[E]) = null
-      var resultB: (B, List[E]) = null
+      var resultA: (A, E) = null
+      var resultB: (B, E) = null
       val togo = new AtomicInteger(2)
 
       def tryComplete = {
         if (togo.decrementAndGet() == 0) {
-          cb((\/-(resultA._1, resultB._1), resultA._2 ++ resultB._2))
+          cb((\/-(resultA._1, resultB._1), Monoid[E].append(resultA._2, resultB._2)))
         } else {
           Trampoline.done(())
         }
       }
 
-      def tryFailure(e: (-\/[Throwable], List[E])): Trampoline[Unit] = {
+      def tryFailure(e: (-\/[Throwable], E)): Trampoline[Unit] = {
         @annotation.tailrec
         def firstFailure: Boolean = {
           val current = togo.get
@@ -139,22 +141,22 @@ object ComplexTask {
           Trampoline.done(())
       }
 
-      val handleA: ((Throwable \/ A, List[E])) => Trampoline[Unit] = {
+      val handleA: ((Throwable \/ A, E)) => Trampoline[Unit] = {
         case (\/-(success), warnings) =>
           resultA = (success, warnings)
           tryComplete
         case (-\/(e), warnings) =>
-          val bWarnings = Option(resultB).map(_._2).getOrElse(Nil)
-          tryFailure((-\/(e), warnings ++ bWarnings))
+          val bWarnings = Option(resultB).map(_._2).getOrElse(Monoid[E].zero)
+          tryFailure((-\/(e), Monoid[E].append(warnings, bWarnings)))
       }
 
-      val handleB: ((Throwable \/ B, List[E])) => Trampoline[Unit] = {
+      val handleB: ((Throwable \/ B, E)) => Trampoline[Unit] = {
         case (\/-(success), warnings) =>
           resultB = (success, warnings)
           tryComplete
         case (-\/(e), warnings) => {
-          val aWarnings = Option(resultA).map(_._2).getOrElse(Nil)
-          tryFailure((-\/(e), warnings ++ aWarnings))
+          val aWarnings = Option(resultA).map(_._2).getOrElse(Monoid[E].zero)
+          tryFailure((-\/(e), Monoid[E].append(warnings, aWarnings)))
         }
       }
 
@@ -164,23 +166,23 @@ object ComplexTask {
 
   }
 
-  def seq3[A, B, C, E](a: ComplexTask[A, E], b: ComplexTask[B, E], c: ComplexTask[C, E]): ComplexTask[(A, B, C), E] = {
+  def seq3[A, B, C, E: Monoid](a: ComplexTask[A, E], b: ComplexTask[B, E], c: ComplexTask[C, E]): ComplexTask[(A, B, C), E] = {
     new ComplexTask[(A, B, C), E](Future.Async { cb =>
       val interrupt = new AtomicBoolean(false)
-      var resultA: (A, List[E]) = null
-      var resultB: (B, List[E]) = null
-      var resultC: (C, List[E]) = null
+      var resultA: (A, E) = null
+      var resultB: (B, E) = null
+      var resultC: (C, E) = null
       val togo = new AtomicInteger(3)
 
       def tryComplete = {
         if (togo.decrementAndGet() == 0) {
-          cb((\/-(resultA._1, resultB._1, resultC._1), resultA._2 ++ resultB._2 ++ resultC._2))
+          cb((\/-(resultA._1, resultB._1, resultC._1), Monoid[E].append(Monoid[E].append(resultA._2, resultB._2), resultC._2)))
         } else {
           Trampoline.done(())
         }
       }
 
-      def tryFailure(e: (-\/[Throwable], List[E])): Trampoline[Unit] = {
+      def tryFailure(e: (-\/[Throwable], E)): Trampoline[Unit] = {
         @annotation.tailrec
         def firstFailure: Boolean = {
           val current = togo.get
@@ -197,21 +199,21 @@ object ComplexTask {
           Trampoline.done(())
       }
 
-      val handleA: ((Throwable \/ A, List[E])) => Trampoline[Unit] = {
+      val handleA: ((Throwable \/ A, E)) => Trampoline[Unit] = {
         case (\/-(success), warnings) =>
           resultA = (success, warnings)
           tryComplete
         case (-\/(e), warnings) => tryFailure((-\/(e), warnings))
       }
 
-      val handleB: ((Throwable \/ B, List[E])) => Trampoline[Unit] = {
+      val handleB: ((Throwable \/ B, E)) => Trampoline[Unit] = {
         case (\/-(success), warnings) =>
           resultB = (success, warnings)
           tryComplete
         case (-\/(e), warnings) => tryFailure((-\/(e), warnings))
       }
 
-      val handleC: ((Throwable \/ C, List[E])) => Trampoline[Unit] = {
+      val handleC: ((Throwable \/ C, E)) => Trampoline[Unit] = {
         case (\/-(success), warnings) =>
           resultC = (success, warnings)
           tryComplete
@@ -225,9 +227,9 @@ object ComplexTask {
 
   }
 
-  def toOpt[A, E](step: ComplexTask[A, E], f: Throwable => E): ComplexTask[Option[A], E] = {
+  def toOpt[A, E: Monoid](step: ComplexTask[A, E], f: Throwable => E): ComplexTask[Option[A], E] = {
     step.map(Some(_)) handleWith { case t: Throwable =>
-      new ComplexTask(Future.now((\/-(Option.empty[A]), List(f(t)))))
+      new ComplexTask(Future.now((\/-(Option.empty[A]), f(t))))
     }
   }
 
@@ -245,27 +247,22 @@ object ComplexTask {
 
   def join1[A, E](a: ComplexTask[A, E]): ComplexTask[A, E] = a
 
-  def join2[A, B, E](a: ComplexTask[A, E], b: ComplexTask[B, E]): ComplexTask[(A, B), E] = {
+  def join2[A, B, E: Monoid](a: ComplexTask[A, E], b: ComplexTask[B, E]): ComplexTask[(A, B), E] = {
     a.flatMap { aVal => b.map { bVal => (aVal, bVal) } }
   }
 
-  def join3[A, B, C, E](a: ComplexTask[A, E], b: ComplexTask[B, E], c: ComplexTask[C, E]): ComplexTask[(A, B, C), E] = {
+  def join3[A, B, C, E: Monoid](a: ComplexTask[A, E], b: ComplexTask[B, E], c: ComplexTask[C, E]): ComplexTask[(A, B, C), E] = {
     a.flatMap { aVal => b.flatMap { bVal => c.map{ cVal => (aVal, bVal, cVal) } } }
   }
 
   /** Create a `Future` that will evaluate `a` using the given `ExecutorService`. */
-  def apply[A, E](a: => (A, List[E]))(implicit pool: ExecutorService = Strategy.DefaultExecutorService): ComplexTask[A, E] =
+  def apply[A, E](a: => (A, E))(implicit pool: ExecutorService = Strategy.DefaultExecutorService, monoid: Monoid[E]): ComplexTask[A, E] =
     new ComplexTask(Future(Try(a))(pool))
 
-  def Salvage[A, E](a: => (A, List[E]))(implicit pool: ExecutorService = Strategy.DefaultExecutorService): ComplexTask[A, E] =
-    new ComplexTask(Future(Try(a))(pool))
-
-
-  implicit val unitPlanStep = planStepInstance[Unit]
-
-  implicit def planStepInstance[E] = {
+  implicit def planStepInstance[E: Monoid] = {
     new Monad[({ type n[a] = ComplexTask[a, E] })#n] {
-      def point[A](a: => A) = new ComplexTask[A, E](Future.delay(Try(a, List.empty[E])))
+      // This implicitly here is only required because apparently the compiler is unable to figure it out
+      def point[A](a: => A) = new ComplexTask[A, E](Future.delay(Try((a, Monoid[E](implicitly[Monoid[E]]).zero))))
 
       def bind[A, B](fa: ComplexTask[A, E])(f: A => ComplexTask[B, E]): ComplexTask[B, E] = {
         fa flatMap f
@@ -281,13 +278,14 @@ object ComplexTask {
 //     }
 //   }
 
-  def fail[E](e: Throwable, es: List[E] = List.empty[E])= new ComplexTask[Nothing, E](Future.now(-\/(e), es))
+  def fail[E: Monoid](e: Throwable): ComplexTask[Nothing, E] = fail(e, Monoid[E].zero)
+  def fail[E: Monoid](e: Throwable, accu: E): ComplexTask[Nothing, E] = new ComplexTask[Nothing, E](Future.now(-\/(e), accu))
 
-  def now[A, E <: Throwable](a: A): ComplexTask[A, E] = new ComplexTask(Future.now(\/-(a), List.empty[E]))
+  def now[A, E: Monoid](a: A): ComplexTask[A, E] = new ComplexTask(Future.now(\/-(a), Monoid[E].zero))
 
-  def Try[A, E](a: => (A, List[E])): (Throwable \/ A, List[E]) =
+  def Try[A, E: Monoid](a: => (A, E)): (Throwable \/ A, E) =
     try {
       val (executedA, warnings) = a
       (\/-(executedA), warnings)
-    } catch { case e: Throwable => (-\/(e), List.empty[E])}
+    } catch { case e: Throwable => (-\/(e), Monoid[E].zero)}
 }
