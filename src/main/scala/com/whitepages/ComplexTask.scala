@@ -71,7 +71,7 @@ class ComplexTask[+A, +E](val get: Future[(Throwable \/ A, List[E])]) {
 
   def mapFailure(f: PartialFunction[Throwable, Throwable]): ComplexTask[A, E] = {
     attempt flatMap {
-      case -\/(e) => ComplexTask.fail(f(e))
+      case -\/(e) => ComplexTask.fail(f.lift(e) getOrElse e)
       case \/-(a) => this
     }
   }
