@@ -6,6 +6,7 @@ import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger}
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration.FiniteDuration
 import scala.concurrent.{Future => SFuture}
+import scala.util.Try
 import scalaz.Free.Trampoline
 import scalaz._
 import scalaz.concurrent._
@@ -31,11 +32,12 @@ class ComplexTask[+A, +E](val get: Future[(Throwable \/ A, List[E])]) {
   def flatMap[B, E1 >: E](f: A => ComplexTask[B, E1]) =
     new ComplexTask[B, E1](get flatMap {
       case (-\/(e), warnings) => Future.now(-\/(e), warnings)
-      case (\/-(a), warnings) => ComplexTask.Try((f(a), List.empty[E1])) match {
-        case (-\/(e), newWarnings) => Future.now((-\/(e), warnings ++ newWarnings))
-        case (\/-(step), newWarnings) => {
+      // We need to catch any exception thrown in the glue code used in the flatMap
+      case (\/-(a), warnings) => Try(f(a)) match {
+        case scala.util.Failure(e) => Future.now((-\/(e), warnings))
+        case scala.util.Success(step) => {
           val f = step.get
-          f.map { case (result, warnings3) => (result, warnings ++ newWarnings ++ warnings3) }
+          f.map { case (result, newWarnings) => (result, warnings ++ newWarnings) }
         }
       }
     })
@@ -45,8 +47,10 @@ class ComplexTask[+A, +E](val get: Future[(Throwable \/ A, List[E])]) {
       result match {
         case -\/(e) => (-\/(e), warnings)
         case \/-(a) => {
-          val (result, newWarnings) = ComplexTask.Try((f(a), List.empty[E]))
-          (result, warnings ++ newWarnings)
+          // We need to catch any exception thrown in the glue code used in the flatMap
+          // Might as well use the utility method in Task that returns a Throwable \/ A
+          val result = Task.Try(f(a))
+          (result, warnings)
         }
       }
     })
@@ -71,7 +75,7 @@ class ComplexTask[+A, +E](val get: Future[(Throwable \/ A, List[E])]) {
 
   def mapFailure(f: PartialFunction[Throwable, Throwable]): ComplexTask[A, E] = {
     attempt flatMap {
-      case -\/(e) => ComplexTask.fail(f(e))
+      case -\/(e) => ComplexTask.fail(f.lift(e) getOrElse e)
       case \/-(a) => ComplexTask.now(a)
     }
   }
