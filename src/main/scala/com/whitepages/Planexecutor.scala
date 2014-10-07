@@ -6,6 +6,8 @@ import shapeless._
 import syntax.std.tuple._
 import scalaz._
 import scalaz.std.list._
+import scalaz.std.tuple.tuple2Monoid
+import scalaz.std.anyVal._
 
 object Planexecutor extends App {
   import scalaz.concurrent.Future
@@ -14,18 +16,18 @@ object Planexecutor extends App {
   import shapeless.contrib.scalaz.sequence
   import shapeless.contrib.scalaz.Sequencer
 
-  def startThing() = ComplexTask[Int, List[String]]((5, Nil))
-  def one(startThing: Int) = ComplexTask[Int, List[String]]((startThing * 8, Nil))
-  def two(otherThing: Int) = ComplexTask[Int, List[String]]((otherThing / 1, Nil))
-  def three(oneThing: Int, twoThing: Int) = ComplexTask[String, List[String]]((oneThing.toString + twoThing, Nil))
-  def four(oneThing: Int, twoThing: Int) = ComplexTask[Boolean, List[String]]((oneThing == twoThing, Nil))
-  def prepareResult(a: String, b: Boolean) = ComplexTask[String, List[String]]((a + b, Nil))
+  def startThing() = ComplexTask[Int, (List[String], Int)]((5, (Nil, 5)))
+  def one(startThing: Int) = ComplexTask[Int, (List[String], Int)]((startThing * 8, (Nil, 10)))
+  def two(otherThing: Int) = ComplexTask[Int, (List[String], Int)]((otherThing / 1, (Nil, 20)))
+  def three(oneThing: Int, twoThing: Int) = ComplexTask[String, (List[String], Int)]((oneThing.toString + twoThing, (Nil, 100)))
+  def four(oneThing: Int, twoThing: Int) = ComplexTask[Boolean, (List[String], Int)]((oneThing == twoThing, (Nil, 3)))
+  def prepareResult(a: String, b: Boolean) = ComplexTask[String, (List[String],Int)]((a + b, (Nil, 40)))
 
 //  def sequence[L <: HList, M <: HList](mandatory: L, optional: M)(implicit seq: Sequencer[L]): Sequencer[L]#Out :: M =
 //    scalaz.sequence(mandatory)(seq)
   import ComplexTask._
 
-  val other = Monad[({type n[a] = ComplexTask[a, List[String]]})#n].map(startThing)((x: Int) => x)
+  val other = Monad[({type n[a] = ComplexTask[a, (List[String], Int)]})#n].map(startThing)((x: Int) => x)
 
   val a = startThing.flatMap{ thing =>
     one(thing).flatMap{ otherThing =>
